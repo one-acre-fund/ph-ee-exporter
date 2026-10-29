@@ -24,7 +24,7 @@ public class KafkaExporterClient {
     private AtomicLong sentToKafka = new AtomicLong(0);
     private boolean initialized;
 
-    private Producer<String, String> producer;
+    private final Producer<String, String> producer;
     private static KafkaExporterConfiguration configuration = new KafkaExporterConfiguration();
 
     public KafkaExporterClient(KafkaExporterConfiguration configuration, Logger logger) {
