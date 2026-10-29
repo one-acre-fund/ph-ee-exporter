@@ -9,6 +9,8 @@ metadata:
     github.com/project-slug: one-acre-fund/ph-ee-exporter
     backstage.io/kubernetes-id: ph-zeebe
     backstage.io/kubernetes-namespace: paymenthub
+    sonarqube.org/project-key: one-acre-fund_ph-ee-exporter
+    backstage.io/code-coverage: sonarqube
   tags:
     - java
     - zeebe
@@ -20,6 +22,9 @@ metadata:
     - url: https://github.com/one-acre-fund/ph-ee-exporter/blob/develop/.github/workflows/build.yaml
       title: Build Pipeline
       icon: build
+    - url: https://sonarcloud.io/project/overview?id=one-acre-fund_ph-ee-exporter
+      title: Code Quality Dashboard
+      icon: dashboard
 spec:
   type: library
   lifecycle: production

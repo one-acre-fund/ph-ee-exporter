@@ -125,3 +125,39 @@ jobs:
         if: ${{ env.SHOULD_PUBLISH == 'true' && env.REGISTRY_PROVIDER == 'acr' }}
         run: |
           docker push ${{ vars.ACR_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}:${{ steps.set-image-tag.outputs.IMAGE_TAG }}
+
+  Sonarcloud:
+    name: Sonar Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          show-progress: false
+
+      - name: Set up Java Version
+        uses: actions/setup-java@v4.7.0
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: maven
+
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v4.2.4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Maven test and SonarCloud analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: mvn -B verify sonar:sonar
+
+      - name: Publish Code Coverage Results
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: test-results
+          path: ${{ github.workspace }}/target/site/jacoco/jacoco.xml
