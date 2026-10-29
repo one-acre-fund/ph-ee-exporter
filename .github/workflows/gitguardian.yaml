@@ -8,6 +8,7 @@ permissions:
 jobs:
   scanning:
     name: GitGuardian scan
+    if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
