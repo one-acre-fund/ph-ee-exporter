@@ -80,13 +80,14 @@ public class KafkaExporterClient {
         }
 
         if (configuration.shouldIndexRecord(zeebeRecord)) {
-            logger.trace("sending record to kafka: {}", zeebeRecord.toJson());
+            String json = zeebeRecord.toJson();
+            logger.trace("sending record to kafka: {}", json);
             sentToKafka.incrementAndGet();
             metrics.recordBulkSize(1);
             String key = extractKafkaKey(zeebeRecord, logger);
-            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, zeebeRecord.toJson()));
+            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, json));
         } else {
-            logger.trace("skipping record: {}", zeebeRecord.toString());
+            logger.trace("skipping record: {}", zeebeRecord);
         }
     }
 
