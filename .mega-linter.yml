@@ -1,3 +1,4 @@
+---
 # MegaLinter configuration, see https://megalinter.io/configuration/
 # Only linters whose findings this codebase acts on. Checkstyle, PMD, cspell and jscpd
 # with stock rules report hundreds of findings on the inherited upstream code.

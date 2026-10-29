@@ -1,3 +1,4 @@
+---
 # MegaLinter GitHub Action configuration file
 # More info at https://megalinter.github.io
 name: Lint with Mega-linter
@@ -6,7 +7,7 @@ permissions:
   issues: write
   pull-requests: write
 
-on:
+"on":
   # Trigger mega-linter at every push. Action will also be visible from Pull Requests to main
   push: # Comment this line to trigger action only on pull-requests (not recommended if you don't pay for GH Actions)
     branches: [master, main, develop]
@@ -86,7 +87,7 @@ jobs:
         with:
           branch: ${{ github.event.pull_request.head.ref || github.head_ref || github.ref }}
           commit_message: "[MegaLinter] Apply linters fixes"
-  #GitLint
+  # GitLint
   gitlint:
     runs-on: ubuntu-latest
     name: GitLint
