@@ -1,6 +1,8 @@
 package hu.dpc.rt.kafkastreamer.exporter;
 
 import io.camunda.zeebe.protocol.record.Record;
+import io.camunda.zeebe.protocol.record.RecordValue;
+import io.camunda.zeebe.protocol.record.value.MessageRecordValue;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
@@ -11,6 +13,7 @@ import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -80,11 +83,30 @@ public class KafkaExporterClient {
             logger.trace("sending record to kafka: {}", record.toJson());
             sentToKafka.incrementAndGet();
             metrics.recordBulkSize(1);
-            String key = Long.toString(record.getKey());
+            String key = extractKafkaKey(record, logger);
             producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, record.toJson()));
         } else {
             logger.trace("skipping record: {}", record.toString());
         }
+    }
+
+    // Key by process instance so every record of one instance lands on one partition and one
+    // importer replica sees them in order. Records without an instance (deployments, messages)
+    // keep the record key. Taken from openMF/ph-ee-exporter v8.4.0-1.3.
+    static String extractKafkaKey(Record<?> record, Logger logger) {
+        String defaultKey = Long.toString(record.getKey());
+        if (record.getValue() instanceof MessageRecordValue) {
+            return defaultKey;
+        }
+        Long processInstanceKey = null;
+        RecordValue value = record.getValue();
+        try {
+            Method method = value.getClass().getMethod("getProcessInstanceKey");
+            processInstanceKey = (Long) method.invoke(value);
+        } catch (Exception e) {
+            logger.warn("Failed to get process instance key from record of type {}, proceeding with record key", value.getClass().getName());
+        }
+        return processInstanceKey != null && processInstanceKey > 0 ? Long.toString(processInstanceKey) : defaultKey;
     }
 
     /**

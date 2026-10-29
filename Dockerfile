@@ -1,8 +1,3 @@
-FROM camunda/zeebe:8.2.13
-RUN apt update; apt install -y iputils-ping vim telnet less; apt clean
-ENV ZEEBE_BROKER_EXPORTERS_KAFKA_JARPATH exporters/phee-exporter.jar
-ENV ZEEBE_BROKER_EXPORTERS_KAFKA_CLASSNAME hu.dpc.rt.kafkastreamer.exporter.KafkaExporter
-ENV ZEEBE_KAFKAEXPORT_URL bitnami-kafka:9092
-ADD target/exporter*.jar /usr/local/zeebe/exporters/phee-exporter.jar
-
-
+FROM busybox:1.36.1
+COPY target/exporter-*.jar /exporter/ph-ee-kafka-exporter.jar
+CMD ["cp", "/exporter/ph-ee-kafka-exporter.jar", "/exporters/"]
