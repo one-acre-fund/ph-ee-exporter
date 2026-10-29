@@ -7,6 +7,7 @@ import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.config.SaslConfigs;
@@ -23,7 +24,7 @@ public class KafkaExporterClient {
     private AtomicLong sentToKafka = new AtomicLong(0);
     private boolean initialized;
 
-    private KafkaProducer<String, String> producer;
+    private Producer<String, String> producer;
     private static KafkaExporterConfiguration configuration = new KafkaExporterConfiguration();
 
     public KafkaExporterClient(KafkaExporterConfiguration configuration, Logger logger) {
@@ -57,6 +58,11 @@ public class KafkaExporterClient {
         }
 
         logger.info("configured Kafka producer with client id {}", clientId);
+    }
+
+    KafkaExporterClient(Producer<String, String> producer, Logger logger) {
+        this.producer = producer;
+        this.logger = logger;
     }
 
     public static String buildKafkaClientId(Logger logger) {
