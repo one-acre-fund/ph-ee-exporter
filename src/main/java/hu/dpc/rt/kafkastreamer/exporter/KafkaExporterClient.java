@@ -49,10 +49,8 @@ public class KafkaExporterClient {
 
         this.producer = new KafkaProducer<>(properties);
 
-        try {
-            AdminClient adminClient = AdminClient.create(properties);
+        try (AdminClient adminClient = AdminClient.create(properties)) {
             adminClient.createTopics(Arrays.asList(new NewTopic(configuration.kafkaTopic, Optional.ofNullable(configuration.kafkaTopicPartitions), Optional.ofNullable(configuration.kafkaTopicReplicationFactor).map(Integer::shortValue))));
-            adminClient.close();
             logger.info("created kafka topic {} with partitions {} and replication factor {} successfully", configuration.kafkaTopic, configuration.kafkaTopicPartitions, configuration.kafkaTopicReplicationFactor);
         } catch (Exception e) {
             logger.warn("Failed to create Kafka topic (it exists already?)", e);
