@@ -21,30 +21,30 @@ class KafkaExporterClientTest {
     void keysByProcessInstanceWhenTheValueHasOne() {
         ProcessInstanceRecordValue value = mock(ProcessInstanceRecordValue.class);
         when(value.getProcessInstanceKey()).thenReturn(4503599629614132L);
-        assertEquals("4503599629614132", KafkaExporterClient.extractKafkaKey(record(value, 2251799813685249L), logger));
+        assertEquals("4503599629614132", KafkaExporterClient.extractKafkaKey(mockRecord(value, 2251799813685249L), logger));
     }
 
     @Test
     void fallsBackToTheRecordKeyWithoutAnInstance() {
         ProcessInstanceRecordValue value = mock(ProcessInstanceRecordValue.class);
         when(value.getProcessInstanceKey()).thenReturn(-1L);
-        assertEquals("77", KafkaExporterClient.extractKafkaKey(record(value, 77L), logger));
+        assertEquals("77", KafkaExporterClient.extractKafkaKey(mockRecord(value, 77L), logger));
 
         DeploymentRecordValue deployment = mock(DeploymentRecordValue.class);
-        assertEquals("78", KafkaExporterClient.extractKafkaKey(record(deployment, 78L), logger));
+        assertEquals("78", KafkaExporterClient.extractKafkaKey(mockRecord(deployment, 78L), logger));
     }
 
     @Test
     void messagesKeepTheRecordKey() {
         MessageRecordValue value = mock(MessageRecordValue.class);
-        assertEquals("79", KafkaExporterClient.extractKafkaKey(record(value, 79L), logger));
+        assertEquals("79", KafkaExporterClient.extractKafkaKey(mockRecord(value, 79L), logger));
     }
 
     @SuppressWarnings("unchecked")
-    private static Record<?> record(RecordValue value, long key) {
-        Record<RecordValue> record = mock(Record.class);
-        when(record.getKey()).thenReturn(key);
-        when(record.getValue()).thenReturn(value);
-        return record;
+    private static Record<?> mockRecord(RecordValue value, long key) {
+        Record<RecordValue> mocked = mock(Record.class);
+        when(mocked.getKey()).thenReturn(key);
+        when(mocked.getValue()).thenReturn(value);
+        return mocked;
     }
 }

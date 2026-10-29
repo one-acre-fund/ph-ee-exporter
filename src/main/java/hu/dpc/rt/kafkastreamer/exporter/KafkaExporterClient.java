@@ -69,37 +69,37 @@ public class KafkaExporterClient {
         producer.close();
     }
 
-    public void index(Record<?> record) {
+    public void index(Record<?> zeebeRecord) {
         if (metrics == null && !initialized) {
             try {
-                metrics = new KafkaExporterMetrics(record.getPartitionId());
+                metrics = new KafkaExporterMetrics(zeebeRecord.getPartitionId());
             } catch (Exception e) {
                 logger.warn("## failed to initialize metrics, continuing without it");
             }
             initialized = true;
         }
 
-        if (configuration.shouldIndexRecord(record)) {
-            logger.trace("sending record to kafka: {}", record.toJson());
+        if (configuration.shouldIndexRecord(zeebeRecord)) {
+            logger.trace("sending record to kafka: {}", zeebeRecord.toJson());
             sentToKafka.incrementAndGet();
             metrics.recordBulkSize(1);
-            String key = extractKafkaKey(record, logger);
-            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, record.toJson()));
+            String key = extractKafkaKey(zeebeRecord, logger);
+            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, zeebeRecord.toJson()));
         } else {
-            logger.trace("skipping record: {}", record.toString());
+            logger.trace("skipping record: {}", zeebeRecord.toString());
         }
     }
 
     // Key by process instance so every record of one instance lands on one partition and one
     // importer replica sees them in order. Records without an instance (deployments, messages)
     // keep the record key. Taken from openMF/ph-ee-exporter v8.4.0-1.3.
-    static String extractKafkaKey(Record<?> record, Logger logger) {
-        String defaultKey = Long.toString(record.getKey());
-        if (record.getValue() instanceof MessageRecordValue) {
+    static String extractKafkaKey(Record<?> zeebeRecord, Logger logger) {
+        String defaultKey = Long.toString(zeebeRecord.getKey());
+        if (zeebeRecord.getValue() instanceof MessageRecordValue) {
             return defaultKey;
         }
         Long processInstanceKey = null;
-        RecordValue value = record.getValue();
+        RecordValue value = zeebeRecord.getValue();
         try {
             Method method = value.getClass().getMethod("getProcessInstanceKey");
             processInstanceKey = (Long) method.invoke(value);
