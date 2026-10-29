@@ -1,16 +1,20 @@
 package hu.dpc.rt.kafkastreamer.exporter;
 
 import io.camunda.zeebe.protocol.record.Record;
+import io.camunda.zeebe.protocol.record.RecordValue;
+import io.camunda.zeebe.protocol.record.value.MessageRecordValue;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -20,7 +24,7 @@ public class KafkaExporterClient {
     private AtomicLong sentToKafka = new AtomicLong(0);
     private boolean initialized;
 
-    private KafkaProducer<String, String> producer;
+    private final Producer<String, String> producer;
     private static KafkaExporterConfiguration configuration = new KafkaExporterConfiguration();
 
     public KafkaExporterClient(KafkaExporterConfiguration configuration, Logger logger) {
@@ -46,16 +50,19 @@ public class KafkaExporterClient {
 
         this.producer = new KafkaProducer<>(properties);
 
-        try {
-            AdminClient adminClient = AdminClient.create(properties);
+        try (AdminClient adminClient = AdminClient.create(properties)) {
             adminClient.createTopics(Arrays.asList(new NewTopic(configuration.kafkaTopic, Optional.ofNullable(configuration.kafkaTopicPartitions), Optional.ofNullable(configuration.kafkaTopicReplicationFactor).map(Integer::shortValue))));
-            adminClient.close();
             logger.info("created kafka topic {} with partitions {} and replication factor {} successfully", configuration.kafkaTopic, configuration.kafkaTopicPartitions, configuration.kafkaTopicReplicationFactor);
         } catch (Exception e) {
             logger.warn("Failed to create Kafka topic (it exists already?)", e);
         }
 
         logger.info("configured Kafka producer with client id {}", clientId);
+    }
+
+    KafkaExporterClient(Producer<String, String> producer, Logger logger) {
+        this.producer = producer;
+        this.logger = logger;
     }
 
     public static String buildKafkaClientId(Logger logger) {
@@ -66,25 +73,45 @@ public class KafkaExporterClient {
         producer.close();
     }
 
-    public void index(Record<?> record) {
+    public void index(Record<?> zeebeRecord) {
         if (metrics == null && !initialized) {
             try {
-                metrics = new KafkaExporterMetrics(record.getPartitionId());
+                metrics = new KafkaExporterMetrics(zeebeRecord.getPartitionId());
             } catch (Exception e) {
                 logger.warn("## failed to initialize metrics, continuing without it");
             }
             initialized = true;
         }
 
-        if (configuration.shouldIndexRecord(record)) {
-            logger.trace("sending record to kafka: {}", record.toJson());
+        if (configuration.shouldIndexRecord(zeebeRecord)) {
+            String json = zeebeRecord.toJson();
+            logger.trace("sending record to kafka: {}", json);
             sentToKafka.incrementAndGet();
             metrics.recordBulkSize(1);
-            String key = Long.toString(record.getKey());
-            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, record.toJson()));
+            String key = extractKafkaKey(zeebeRecord, logger);
+            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, json));
         } else {
-            logger.trace("skipping record: {}", record.toString());
+            logger.trace("skipping record: {}", zeebeRecord);
         }
+    }
+
+    // Key by process instance so every record of one instance lands on one partition and one
+    // importer replica sees them in order. Records without an instance (deployments, messages)
+    // keep the record key. Taken from openMF/ph-ee-exporter v8.4.0-1.3.
+    static String extractKafkaKey(Record<?> zeebeRecord, Logger logger) {
+        String defaultKey = Long.toString(zeebeRecord.getKey());
+        if (zeebeRecord.getValue() instanceof MessageRecordValue) {
+            return defaultKey;
+        }
+        Long processInstanceKey = null;
+        RecordValue value = zeebeRecord.getValue();
+        try {
+            Method method = value.getClass().getMethod("getProcessInstanceKey");
+            processInstanceKey = (Long) method.invoke(value);
+        } catch (Exception e) {
+            logger.warn("Failed to get process instance key from record of type {}, proceeding with record key", value.getClass().getName());
+        }
+        return processInstanceKey != null && processInstanceKey > 0 ? Long.toString(processInstanceKey) : defaultKey;
     }
 
     /**

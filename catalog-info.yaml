@@ -1,0 +1,34 @@
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ph-ee-exporter
+  title: PH Zeebe Kafka Exporter
+  description: Zeebe exporter that publishes PaymentHub workflow records to Kafka for the importers and operations reporting
+  annotations:
+    github.com/project-slug: one-acre-fund/ph-ee-exporter
+    backstage.io/kubernetes-id: ph-zeebe
+    backstage.io/kubernetes-namespace: paymenthub
+    sonarqube.org/project-key: one-acre-fund_ph-ee-exporter
+    backstage.io/code-coverage: sonarqube
+  tags:
+    - java
+    - zeebe
+    - exporter
+    - kafka
+    - payment-hub
+    - paymenthub
+  links:
+    - url: https://github.com/one-acre-fund/ph-ee-exporter/blob/develop/.github/workflows/build.yaml
+      title: Build Pipeline
+      icon: build
+    - url: https://sonarcloud.io/project/overview?id=one-acre-fund_ph-ee-exporter
+      title: Code Quality Dashboard
+      icon: dashboard
+spec:
+  type: library
+  lifecycle: production
+  owner: group:one-acre-fund/credits-and-payments
+  system: operations
+  dependsOn:
+    - resource:default/kafka-cluster
