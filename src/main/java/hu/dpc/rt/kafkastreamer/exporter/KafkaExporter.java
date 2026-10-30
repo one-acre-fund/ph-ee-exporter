@@ -31,11 +31,14 @@ public class KafkaExporter implements Exporter {
     @Override
     public void open(final Controller controller) {
         logger.info("DPC Kafka exporter opening");
-        this.controller = controller;
-        client = new KafkaExporterClient(configuration, logger);
-
-        scheduleDelayedFlush();
+        open(controller, new KafkaExporterClient(configuration, logger));
         logger.info("DPC Kafka exporter opened");
+    }
+
+    void open(final Controller controller, final KafkaExporterClient client) {
+        this.controller = controller;
+        this.client = client;
+        scheduleDelayedFlush();
     }
 
     @Override
@@ -59,12 +62,12 @@ public class KafkaExporter implements Exporter {
     @Override
     public void export(Record<?> record) {
         logger.trace("Exporting record " + record);
+        // Zeebe retries a record whose export throws, so this holds new records back until Kafka catches up.
+        if (client.shouldFlush() && !flush()) {
+            throw new IllegalStateException("Kafka has not acknowledged the pending records yet");
+        }
         client.index(record);
         lastPosition = record.getPosition();
-
-        if (client.shouldFlush()) {
-            flush();
-        }
         logger.trace("Finish exporting record " + record);
     }
 
@@ -81,11 +84,12 @@ public class KafkaExporter implements Exporter {
         controller.scheduleCancellableTask(Duration.ofSeconds(configuration.bulk.delay), this::flushAndReschedule);
     }
 
-    private void flush() {
+    private boolean flush() {
         if (client.flush()) {
             controller.updateLastExportedRecordPosition(lastPosition);
-        } else {
-            logger.warn("Failed to flush bulk completely");
+            return true;
         }
+        logger.warn("Failed to flush bulk completely, keeping the last exported position");
+        return false;
     }
 }
