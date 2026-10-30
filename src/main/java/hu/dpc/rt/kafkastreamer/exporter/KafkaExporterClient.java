@@ -10,18 +10,22 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.config.SaslConfigs;
+import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 
 import java.lang.reflect.Method;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
 public class KafkaExporterClient {
     private Logger logger;
     private KafkaExporterMetrics metrics;
-    private AtomicLong sentToKafka = new AtomicLong(0);
+    // Records sent since the last confirmed flush, in send order.
+    private final List<PendingRecord> pending = new ArrayList<>();
     private boolean initialized;
 
     private final Producer<String, String> producer;
@@ -36,7 +40,8 @@ public class KafkaExporterClient {
         properties.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
         properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        properties.put(ProducerConfig.RETRIES_CONFIG, 3);
+        properties.put(ProducerConfig.ACKS_CONFIG, "all");
+        properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
 
         if (configuration.isMskEnabled()) {
             logger.info("configuring Kafka client with AWS MSK support");
@@ -86,10 +91,11 @@ public class KafkaExporterClient {
         if (configuration.shouldIndexRecord(zeebeRecord)) {
             String json = zeebeRecord.toJson();
             logger.trace("sending record to kafka: {}", json);
-            sentToKafka.incrementAndGet();
-            metrics.recordBulkSize(1);
+            if (metrics != null) {
+                metrics.recordBulkSize(1);
+            }
             String key = extractKafkaKey(zeebeRecord, logger);
-            producer.send(new ProducerRecord<>(configuration.kafkaTopic, key, json));
+            send(new ProducerRecord<>(configuration.kafkaTopic, key, json));
         } else {
             logger.trace("skipping record: {}", zeebeRecord);
         }
@@ -114,20 +120,61 @@ public class KafkaExporterClient {
         return processInstanceKey != null && processInstanceKey > 0 ? Long.toString(processInstanceKey) : defaultKey;
     }
 
+    private void send(ProducerRecord<String, String> message) {
+        pending.add(new PendingRecord(message, producer.send(message)));
+    }
+
     /**
-     * @return true if all bulk records where flushed successfully
+     * Waits until Kafka has acknowledged every pending record. Records from the first
+     * failed one onwards are sent again, in order, and checked on the next flush. A record
+     * Kafka will never accept (too large) is dropped with an error instead of blocking export.
+     *
+     * @return true if Kafka acknowledged all pending records
      */
     public boolean flush() {
-        if (sentToKafka.get() > 0) {
-            producer.flush();
-            logger.info("flushed {} exported records to Kafka", sentToKafka.get());
-            sentToKafka.set(0);
+        if (pending.isEmpty()) {
+            return true;
         }
-        return true;
+        producer.flush();
+
+        int firstFailed = firstFailedIndex();
+        if (firstFailed < 0) {
+            logger.info("flushed {} exported records to Kafka", pending.size());
+            pending.clear();
+            return true;
+        }
+
+        List<PendingRecord> unconfirmed = new ArrayList<>(pending.subList(firstFailed, pending.size()));
+        pending.clear();
+        unconfirmed.forEach(unsent -> send(unsent.message()));
+        logger.error("Kafka did not acknowledge {} exported records, sending them again", unconfirmed.size());
+        return false;
+    }
+
+    private int firstFailedIndex() {
+        for (int i = 0; i < pending.size(); i++) {
+            try {
+                pending.get(i).result().get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return i;
+            } catch (ExecutionException e) {
+                if (e.getCause() instanceof RecordTooLargeException) {
+                    logger.error("Dropping record with key {}: larger than Kafka accepts", pending.get(i).message().key(), e.getCause());
+                    continue;
+                }
+                logger.error("Failed to send record to Kafka", e.getCause());
+                return i;
+            }
+        }
+        return -1;
     }
 
     public boolean shouldFlush() {
-        return sentToKafka.get() >= configuration.bulk.size;
+        return pending.size() >= configuration.bulk.size;
+    }
+
+    private record PendingRecord(ProducerRecord<String, String> message, Future<RecordMetadata> result) {
     }
 
 }
