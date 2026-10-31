@@ -5,6 +5,7 @@ import io.camunda.zeebe.exporter.api.context.Context;
 import io.camunda.zeebe.exporter.api.context.Controller;
 import io.camunda.zeebe.protocol.record.Record;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.slf4j.Logger;
 
 import java.util.Map;
@@ -61,11 +62,22 @@ class KafkaExporterDegradedTest {
         exporter.configure(context(Map.of()));
         exporter.open(controller);
 
-        Record<?> record = record();
-        assertThrows(IllegalStateException.class, () -> exporter.export(record));
-        assertThrows(IllegalStateException.class, () -> exporter.export(record));
+        Record<?> zeebeRecord = partitionThreeRecord();
+        assertThrows(IllegalStateException.class, () -> exporter.export(zeebeRecord));
+        assertThrows(IllegalStateException.class, () -> exporter.export(zeebeRecord));
 
         verify(logger, times(1)).error(eq(DEGRADED_EVENT), eq(REASON_INVALID_CONFIG), eq("3"), contains("kafkaUrl is required"));
+    }
+
+    @Test
+    void theScheduledFlushSkipsAnExporterWithoutAProducer() {
+        exporter.configure(context(Map.of("kafkaUrl", "kafka.invalid:9092")));
+        exporter.open(controller);
+
+        ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
+        verify(controller).scheduleCancellableTask(any(), task.capture());
+        assertDoesNotThrow(() -> task.getValue().run());
+        verify(controller, never()).updateLastExportedRecordPosition(anyLong());
     }
 
     @Test
@@ -77,15 +89,15 @@ class KafkaExporterDegradedTest {
     }
 
     private void assertExportIsHeldBack() {
-        Record<?> record = record();
-        assertThrows(IllegalStateException.class, () -> exporter.export(record));
+        Record<?> zeebeRecord = partitionThreeRecord();
+        assertThrows(IllegalStateException.class, () -> exporter.export(zeebeRecord));
         verify(controller, never()).updateLastExportedRecordPosition(anyLong());
     }
 
-    private static Record<?> record() {
-        Record<?> record = KafkaExporterClientTest.event(1L);
-        when(record.getPartitionId()).thenReturn(3);
-        return record;
+    private static Record<?> partitionThreeRecord() {
+        Record<?> zeebeRecord = KafkaExporterClientTest.event(1L);
+        when(zeebeRecord.getPartitionId()).thenReturn(3);
+        return zeebeRecord;
     }
 
     private Context context(Map<String, Object> args) {

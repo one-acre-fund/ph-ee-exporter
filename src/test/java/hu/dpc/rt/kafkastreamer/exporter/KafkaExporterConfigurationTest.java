@@ -3,8 +3,10 @@ package hu.dpc.rt.kafkastreamer.exporter;
 import io.camunda.zeebe.broker.exporter.context.ExporterConfiguration;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -67,11 +69,26 @@ class KafkaExporterConfigurationTest {
     }
 
     @Test
-    void aBlankTopicIsInvalid() {
-        KafkaExporterConfiguration configuration = fromArgs(Map.of("kafkaUrl", "kafka:9092", "kafkaTopic", " "));
+    void blankOrMissingUrlAndTopicAreInvalid() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("kafkaUrl", " ");
+        args.put("kafkaTopic", null);
+        KafkaExporterConfiguration configuration = fromArgs(args);
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, configuration::validate);
+        assertTrue(error.getMessage().contains("kafkaUrl is required"), error.getMessage());
         assertTrue(error.getMessage().contains("kafkaTopic must not be empty"), error.getMessage());
+
+        configuration.kafkaTopic = " ";
+        error = assertThrows(IllegalArgumentException.class, configuration::validate);
+        assertTrue(error.getMessage().contains("kafkaTopic must not be empty"), error.getMessage());
+    }
+
+    @Test
+    void aDeliveryTimeoutAboveTheRequestTimeoutIsValid() {
+        KafkaExporterConfiguration configuration = fromArgs(Map.of("kafkaUrl", "kafka:9092", "requestTimeoutMs", "1000", "deliveryTimeoutMs", "5000"));
+
+        assertDoesNotThrow(configuration::validate);
     }
 
     @Test

@@ -126,7 +126,7 @@ public class KafkaExporter implements Exporter {
     }
 
     private void logDegraded(String reason, String partition, String detail, Exception cause) {
-        String singleLine = detail == null ? "" : detail.replace('"', '\'').replace('\n', ' ').replace('\r', ' ');
+        String singleLine = detail.replace('"', '\'').replace('\n', ' ').replace('\r', ' ');
         if (cause == null) {
             logger.error(DEGRADED_EVENT, reason, partition, singleLine);
         } else {
@@ -138,8 +138,8 @@ public class KafkaExporter implements Exporter {
     // NumberFormatException (a subclass) would lose the setting name.
     private static String configurationMessage(Throwable e) {
         String message = e.getMessage();
-        for (Throwable t = e; t != null && t.getCause() != t; t = t.getCause()) {
-            if (t.getClass() == IllegalArgumentException.class && t.getMessage() != null) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t.getClass() == IllegalArgumentException.class) {
                 message = t.getMessage();
             }
         }
@@ -148,7 +148,7 @@ public class KafkaExporter implements Exporter {
 
     private static String rootMessage(Throwable e) {
         Throwable root = e;
-        while (root.getCause() != null && root.getCause() != root) {
+        while (root.getCause() != null) {
             root = root.getCause();
         }
         return root.getMessage() != null ? root.getMessage() : root.getClass().getSimpleName();
