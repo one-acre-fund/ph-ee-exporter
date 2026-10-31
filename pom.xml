@@ -5,7 +5,7 @@
 
     <groupId>hu.dpc.phee</groupId>
     <artifactId>exporter</artifactId>
-    <version>8.2.29-oaf.2</version>
+    <version>8.2.29-oaf.3</version>
 
     <properties>
         <java.version>17</java.version>
@@ -63,6 +63,19 @@
             <artifactId>json</artifactId>
             <version>${json.version}</version>
             <scope>provided</scope>
+        </dependency>
+        <!-- Zeebe's own args mapping, so tests bind exporter args exactly as the broker does -->
+        <dependency>
+            <groupId>io.camunda</groupId>
+            <artifactId>zeebe-broker</artifactId>
+            <version>${zeebe.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

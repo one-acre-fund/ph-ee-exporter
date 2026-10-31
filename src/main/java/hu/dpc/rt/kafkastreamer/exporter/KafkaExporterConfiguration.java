@@ -3,19 +3,26 @@ package hu.dpc.rt.kafkastreamer.exporter;
 import io.camunda.zeebe.protocol.record.Record;
 import io.camunda.zeebe.protocol.record.RecordType;
 import io.camunda.zeebe.protocol.record.ValueType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.util.ObjectUtils;
 
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 
+/**
+ * Zeebe fills this from the exporter's {@code args} (matched case-insensitively, so
+ * {@code ZEEBE_BROKER_EXPORTERS_KAFKA_ARGS_KAFKAURL} sets {@code kafkaUrl}). The constructor
+ * first loads the {@code ZEEBE_KAFKAEXPORT_*} env vars, so args win and env is the fallback.
+ */
 public class KafkaExporterConfiguration {
-    private Logger logger = LoggerFactory.getLogger(this.getClass());
+    private static final int KAFKA_DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
     public String kafkaUrl;
     public String kafkaTopic;
     public Integer kafkaTopicPartitions;
     public Integer kafkaTopicReplicationFactor;
+    // Unset leaves the Kafka producer defaults (30s and 120s).
+    public Integer requestTimeoutMs;
+    public Integer deliveryTimeoutMs;
 
     public BulkConfiguration bulk = new BulkConfiguration();
 
@@ -28,15 +35,56 @@ public class KafkaExporterConfiguration {
         }
         kafkaTopicPartitions = parseEnvInt("ZEEBE_KAFKAEXPORT_TOPIC_PARTITIONS");
         kafkaTopicReplicationFactor = parseEnvInt("ZEEBE_KAFKAEXPORT_TOPIC_REPLICATION_FACTOR");
-        logger.info("Kafka exporter configuration: {}", this);
     }
 
-    private Integer parseEnvInt(String key) {
-        try {
-            return Integer.parseInt(System.getenv(key));
-        } catch (Exception e) {
-            logger.warn("Failed to parse env var '{}' with value '{}' as int", key, System.getenv(key));
+    private static Integer parseEnvInt(String key) {
+        return parseInt(key, System.getenv(key));
+    }
+
+    static Integer parseInt(String key, String value) {
+        if (ObjectUtils.isEmpty(value)) {
             return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be a whole number, got '" + value + "'", e);
+        }
+    }
+
+    /**
+     * Rejects settings the exporter cannot run with, so the broker refuses to start
+     * instead of failing later on the first export.
+     */
+    public void validate() {
+        List<String> problems = new ArrayList<>();
+        if (kafkaUrl == null || kafkaUrl.isBlank()) {
+            problems.add("kafkaUrl is required (args.kafkaUrl or ZEEBE_KAFKAEXPORT_URL)");
+        }
+        if (kafkaTopic == null || kafkaTopic.isBlank()) {
+            problems.add("kafkaTopic must not be empty");
+        }
+        requirePositive(problems, "kafkaTopicPartitions", kafkaTopicPartitions);
+        requirePositive(problems, "kafkaTopicReplicationFactor", kafkaTopicReplicationFactor);
+        requirePositive(problems, "requestTimeoutMs", requestTimeoutMs);
+        requirePositive(problems, "deliveryTimeoutMs", deliveryTimeoutMs);
+        requirePositive(problems, "bulk.size", bulk.size);
+        requirePositive(problems, "bulk.delay", bulk.delay);
+        if (deliveryTimeoutMs != null && deliveryTimeoutMs < effectiveRequestTimeoutMs()) {
+            problems.add("deliveryTimeoutMs (" + deliveryTimeoutMs + ") must be at least requestTimeoutMs (" + effectiveRequestTimeoutMs() + ")");
+        }
+        if (!problems.isEmpty()) {
+            throw new IllegalArgumentException("Invalid Kafka exporter configuration: " + String.join("; ", problems));
+        }
+    }
+
+    private int effectiveRequestTimeoutMs() {
+        return requestTimeoutMs != null ? requestTimeoutMs : KAFKA_DEFAULT_REQUEST_TIMEOUT_MS;
+    }
+
+    private static void requirePositive(List<String> problems, String name, Integer value) {
+        if (value != null && value < 1) {
+            problems.add(name + " must be at least 1, got " + value);
         }
     }
 
@@ -47,6 +95,9 @@ public class KafkaExporterConfiguration {
                 ", kafkaTopic='" + kafkaTopic + '\'' +
                 ", kafkaTopicPartitions='" + kafkaTopicPartitions + '\'' +
                 ", kafkaTopicReplicationFactor='" + kafkaTopicReplicationFactor + '\'' +
+                ", requestTimeoutMs=" + requestTimeoutMs +
+                ", deliveryTimeoutMs=" + deliveryTimeoutMs +
+                ", bulk=" + bulk +
                 '}';
     }
 

@@ -58,7 +58,7 @@ class KafkaExporterClientTest {
         Record<?> event = mockRecord(value, 2251799813685249L, RecordType.EVENT, ValueType.PROCESS_INSTANCE);
         when(event.toJson()).thenReturn("{\"key\":2251799813685249}");
 
-        new KafkaExporterClient(producer, logger).index(event);
+        new KafkaExporterClient(new KafkaExporterConfiguration(), producer, logger).index(event);
 
         assertEquals(1, producer.history().size());
         ProducerRecord<String, String> sent = producer.history().get(0);
@@ -72,7 +72,7 @@ class KafkaExporterClientTest {
         MockProducer<String, String> producer = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
         Record<?> command = mockRecord(mock(ProcessInstanceRecordValue.class), 80L, RecordType.COMMAND, ValueType.PROCESS_INSTANCE);
 
-        new KafkaExporterClient(producer, logger).index(command);
+        new KafkaExporterClient(new KafkaExporterConfiguration(), producer, logger).index(command);
 
         assertTrue(producer.history().isEmpty());
     }
@@ -80,7 +80,7 @@ class KafkaExporterClientTest {
     @Test
     void resendsFromTheFirstUnacknowledgedRecordAndReportsTheFlushAsFailed() {
         MockProducer<String, String> producer = new MockProducer<>(false, new StringSerializer(), new StringSerializer());
-        KafkaExporterClient client = new KafkaExporterClient(producer, logger);
+        KafkaExporterClient client = new KafkaExporterClient(new KafkaExporterConfiguration(), producer, logger);
         client.index(event(1L));
         client.index(event(2L));
         client.index(event(3L));
@@ -99,7 +99,7 @@ class KafkaExporterClientTest {
     @Test
     void flushIsConfirmedWhenKafkaAcknowledgesEveryRecord() {
         MockProducer<String, String> producer = new MockProducer<>(false, new StringSerializer(), new StringSerializer());
-        KafkaExporterClient client = new KafkaExporterClient(producer, logger);
+        KafkaExporterClient client = new KafkaExporterClient(new KafkaExporterConfiguration(), producer, logger);
         client.index(event(1L));
         client.index(event(2L));
 
@@ -110,7 +110,7 @@ class KafkaExporterClientTest {
     @Test
     void dropsARecordKafkaWillNeverAcceptInsteadOfBlockingExport() {
         MockProducer<String, String> producer = new MockProducer<>(false, new StringSerializer(), new StringSerializer());
-        KafkaExporterClient client = new KafkaExporterClient(producer, logger);
+        KafkaExporterClient client = new KafkaExporterClient(new KafkaExporterConfiguration(), producer, logger);
         client.index(event(1L));
         client.index(event(2L));
 

@@ -29,10 +29,11 @@ public class KafkaExporterClient {
     private boolean initialized;
 
     private final Producer<String, String> producer;
-    private static KafkaExporterConfiguration configuration = new KafkaExporterConfiguration();
+    private final KafkaExporterConfiguration configuration;
 
     public KafkaExporterClient(KafkaExporterConfiguration configuration, Logger logger) {
         this.logger = logger;
+        this.configuration = configuration;
         String clientId = buildKafkaClientId(logger);
 
         Map<String, Object> properties = new HashMap<>();
@@ -42,6 +43,12 @@ public class KafkaExporterClient {
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         properties.put(ProducerConfig.ACKS_CONFIG, "all");
         properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        if (configuration.requestTimeoutMs != null) {
+            properties.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, configuration.requestTimeoutMs);
+        }
+        if (configuration.deliveryTimeoutMs != null) {
+            properties.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, configuration.deliveryTimeoutMs);
+        }
 
         if (configuration.isMskEnabled()) {
             logger.info("configuring Kafka client with AWS MSK support");
@@ -65,7 +72,8 @@ public class KafkaExporterClient {
         logger.info("configured Kafka producer with client id {}", clientId);
     }
 
-    KafkaExporterClient(Producer<String, String> producer, Logger logger) {
+    KafkaExporterClient(KafkaExporterConfiguration configuration, Producer<String, String> producer, Logger logger) {
+        this.configuration = configuration;
         this.producer = producer;
         this.logger = logger;
     }
