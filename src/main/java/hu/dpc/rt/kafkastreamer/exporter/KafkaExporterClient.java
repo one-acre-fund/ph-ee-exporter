@@ -4,7 +4,7 @@ import io.camunda.zeebe.protocol.record.Record;
 import io.camunda.zeebe.protocol.record.RecordValue;
 import io.camunda.zeebe.protocol.record.value.MessageRecordValue;
 import org.apache.kafka.clients.CommonClientConfigs;
-import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
@@ -13,20 +13,26 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.errors.RecordTooLargeException;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public class KafkaExporterClient {
+    private static final long KAFKA_DEFAULT_MAX_BLOCK_MS = 60_000;
     private Logger logger;
     private KafkaExporterMetrics metrics;
     // Records sent since the last confirmed flush, in send order.
     private final List<PendingRecord> pending = new ArrayList<>();
     private boolean initialized;
+    private String lastFailure = "Kafka did not acknowledge the pending records";
 
     private final Producer<String, String> producer;
     private final KafkaExporterConfiguration configuration;
@@ -43,6 +49,9 @@ public class KafkaExporterClient {
         properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         properties.put(ProducerConfig.ACKS_CONFIG, "all");
         properties.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        if (configuration.maxBlockMs != null) {
+            properties.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, configuration.maxBlockMs);
+        }
         if (configuration.requestTimeoutMs != null) {
             properties.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, configuration.requestTimeoutMs);
         }
@@ -62,14 +71,36 @@ public class KafkaExporterClient {
 
         this.producer = new KafkaProducer<>(properties);
 
-        try (AdminClient adminClient = AdminClient.create(properties)) {
-            adminClient.createTopics(Arrays.asList(new NewTopic(configuration.kafkaTopic, Optional.ofNullable(configuration.kafkaTopicPartitions), Optional.ofNullable(configuration.kafkaTopicReplicationFactor).map(Integer::shortValue))));
-            logger.info("created kafka topic {} with partitions {} and replication factor {} successfully", configuration.kafkaTopic, configuration.kafkaTopicPartitions, configuration.kafkaTopicReplicationFactor);
-        } catch (Exception e) {
-            logger.warn("Failed to create Kafka topic (it exists already?)", e);
-        }
+        createTopic(properties, configuration);
 
         logger.info("configured Kafka producer with client id {}", clientId);
+    }
+
+    // Bounded like a send, so an unreachable Kafka does not hold up opening the exporter; the
+    // admin client is closed without waiting for a request Kafka never answered.
+    private void createTopic(Map<String, Object> properties, KafkaExporterConfiguration configuration) {
+        NewTopic topic = new NewTopic(configuration.kafkaTopic, Optional.ofNullable(configuration.kafkaTopicPartitions), Optional.ofNullable(configuration.kafkaTopicReplicationFactor).map(Integer::shortValue));
+        long timeoutMs = configuration.maxBlockMs != null ? configuration.maxBlockMs : KAFKA_DEFAULT_MAX_BLOCK_MS;
+        createTopic(Admin.create(properties), topic, timeoutMs);
+    }
+
+    void createTopic(Admin admin, NewTopic topic, long timeoutMs) {
+        try {
+            admin.createTopics(List.of(topic)).all().get(timeoutMs, TimeUnit.MILLISECONDS);
+            logger.info("created kafka topic {} with partitions {} and replication factor {}", topic.name(), topic.numPartitions(), topic.replicationFactor());
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof TopicExistsException) {
+                logger.info("kafka topic {} already exists", topic.name());
+            } else {
+                logger.warn("Failed to create Kafka topic {}", topic.name(), e.getCause());
+            }
+        } catch (TimeoutException e) {
+            logger.warn("Kafka did not answer the create request for topic {} within {} ms", topic.name(), timeoutMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            admin.close(Duration.ZERO);
+        }
     }
 
     KafkaExporterClient(KafkaExporterConfiguration configuration, Producer<String, String> producer, Logger logger) {
@@ -128,14 +159,22 @@ public class KafkaExporterClient {
         return processInstanceKey != null && processInstanceKey > 0 ? Long.toString(processInstanceKey) : defaultKey;
     }
 
+    // Once a send has failed straight away (Kafka unreachable), later records wait unsent instead of
+    // each blocking for max.block.ms; they keep their order and go out on the next flush.
     private void send(ProducerRecord<String, String> message) {
-        pending.add(new PendingRecord(message, producer.send(message)));
+        Future<RecordMetadata> result = holdingBack() ? null : producer.send(message);
+        pending.add(new PendingRecord(message, result));
+    }
+
+    private boolean holdingBack() {
+        return !pending.isEmpty() && failedImmediately(pending.get(pending.size() - 1).result());
     }
 
     /**
-     * Waits until Kafka has acknowledged every pending record. Records from the first
-     * failed one onwards are sent again, in order, and checked on the next flush. A record
-     * Kafka will never accept (too large) is dropped with an error instead of blocking export.
+     * Sends any held-back records, then waits until Kafka has acknowledged every pending record.
+     * Records from the first failed one onwards are kept, in order, and sent again on the next
+     * flush. A record Kafka will never accept (too large) is dropped with an error instead of
+     * blocking export.
      *
      * @return true if Kafka acknowledged all pending records
      */
@@ -143,6 +182,7 @@ public class KafkaExporterClient {
         if (pending.isEmpty()) {
             return true;
         }
+        sendHeldBackRecords();
         producer.flush();
 
         int firstFailed = firstFailedIndex();
@@ -152,17 +192,36 @@ public class KafkaExporterClient {
             return true;
         }
 
-        List<PendingRecord> unconfirmed = new ArrayList<>(pending.subList(firstFailed, pending.size()));
+        List<ProducerRecord<String, String>> unconfirmed = pending.subList(firstFailed, pending.size()).stream()
+                .map(PendingRecord::message)
+                .toList();
         pending.clear();
-        unconfirmed.forEach(unsent -> send(unsent.message()));
-        logger.error("Kafka did not acknowledge {} exported records, sending them again", unconfirmed.size());
+        unconfirmed.forEach(message -> pending.add(new PendingRecord(message, null)));
+        logger.error("Kafka did not acknowledge {} exported records, sending them again on the next flush", unconfirmed.size());
         return false;
+    }
+
+    private void sendHeldBackRecords() {
+        for (int i = 0; i < pending.size(); i++) {
+            PendingRecord held = pending.get(i);
+            if (held.result() != null) {
+                continue;
+            }
+            if (i > 0 && failedImmediately(pending.get(i - 1).result())) {
+                return;
+            }
+            pending.set(i, new PendingRecord(held.message(), producer.send(held.message())));
+        }
     }
 
     private int firstFailedIndex() {
         for (int i = 0; i < pending.size(); i++) {
+            Future<RecordMetadata> result = pending.get(i).result();
+            if (result == null) {
+                return i;
+            }
             try {
-                pending.get(i).result().get();
+                result.get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return i;
@@ -171,11 +230,35 @@ public class KafkaExporterClient {
                     logger.error("Dropping record with key {}: larger than Kafka accepts", pending.get(i).message().key(), e.getCause());
                     continue;
                 }
+                lastFailure = String.valueOf(e.getCause());
                 logger.error("Failed to send record to Kafka", e.getCause());
                 return i;
             }
         }
         return -1;
+    }
+
+    // A too-large record fails on its own and must not hold back the records after it.
+    private static boolean failedImmediately(Future<RecordMetadata> result) {
+        if (result == null) {
+            return true;
+        }
+        if (!result.isDone()) {
+            return false;
+        }
+        try {
+            result.get();
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return true;
+        } catch (ExecutionException e) {
+            return !(e.getCause() instanceof RecordTooLargeException);
+        }
+    }
+
+    String lastFailure() {
+        return lastFailure;
     }
 
     public boolean shouldFlush() {

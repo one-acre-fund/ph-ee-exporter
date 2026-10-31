@@ -23,6 +23,9 @@ public class KafkaExporterConfiguration {
     // Unset leaves the Kafka producer defaults (30s and 120s).
     public Integer requestTimeoutMs;
     public Integer deliveryTimeoutMs;
+    // How long a send may wait for Kafka metadata. Kafka's 60s default would stall the exporter
+    // for a minute per send while Kafka is unreachable.
+    public Integer maxBlockMs = 5_000;
 
     public BulkConfiguration bulk = new BulkConfiguration();
 
@@ -68,6 +71,7 @@ public class KafkaExporterConfiguration {
         requirePositive(problems, "kafkaTopicReplicationFactor", kafkaTopicReplicationFactor);
         requirePositive(problems, "requestTimeoutMs", requestTimeoutMs);
         requirePositive(problems, "deliveryTimeoutMs", deliveryTimeoutMs);
+        requirePositive(problems, "maxBlockMs", maxBlockMs);
         requirePositive(problems, "bulk.size", bulk.size);
         requirePositive(problems, "bulk.delay", bulk.delay);
         if (deliveryTimeoutMs != null && deliveryTimeoutMs < effectiveRequestTimeoutMs()) {
@@ -97,6 +101,7 @@ public class KafkaExporterConfiguration {
                 ", kafkaTopicReplicationFactor='" + kafkaTopicReplicationFactor + '\'' +
                 ", requestTimeoutMs=" + requestTimeoutMs +
                 ", deliveryTimeoutMs=" + deliveryTimeoutMs +
+                ", maxBlockMs=" + maxBlockMs +
                 ", bulk=" + bulk +
                 '}';
     }

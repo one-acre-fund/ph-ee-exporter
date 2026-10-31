@@ -4,6 +4,7 @@ import io.camunda.zeebe.exporter.api.context.Context;
 import io.camunda.zeebe.exporter.api.context.Controller;
 import io.camunda.zeebe.protocol.record.Record;
 import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
@@ -30,10 +33,10 @@ class KafkaExporterTest {
     private final Controller controller = mock(Controller.class);
     private final MockProducer<String, String> producer = new MockProducer<>(false, new StringSerializer(), new StringSerializer());
     private final KafkaExporter exporter = new KafkaExporter();
+    private final Logger logger = mock(Logger.class);
 
     @BeforeEach
     void openExporter() {
-        Logger logger = mock(Logger.class);
         Context context = mock(Context.class, RETURNS_DEEP_STUBS);
         when(context.getLogger()).thenReturn(logger);
         KafkaExporterConfiguration configuration = new KafkaExporterConfiguration();
@@ -72,6 +75,18 @@ class KafkaExporterTest {
 
         scheduledFlush().run();
         verify(controller).updateLastExportedRecordPosition(3L);
+    }
+
+    @Test
+    void aKafkaOutageIsReportedForAlertingAndItsEndToo() {
+        exporter.export(positioned(1));
+        producer.errorNext(new TimeoutException("Topic zeebe-export not present in metadata after 5000 ms."));
+        scheduledFlush().run();
+        scheduledFlush().run();
+
+        verify(logger).error(eq(KafkaExporter.DEGRADED_EVENT), eq(KafkaExporter.REASON_KAFKA_UNAVAILABLE), eq("0"), contains("not present in metadata"));
+        verify(logger).info(KafkaExporter.RECOVERED_EVENT, "0");
+        verify(controller).updateLastExportedRecordPosition(1L);
     }
 
     @Test
