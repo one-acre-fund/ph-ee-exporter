@@ -64,6 +64,19 @@
             <version>${json.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Zeebe's own args mapping, so tests bind exporter args exactly as the broker does -->
+        <dependency>
+            <groupId>io.camunda</groupId>
+            <artifactId>zeebe-broker</artifactId>
+            <version>${zeebe.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

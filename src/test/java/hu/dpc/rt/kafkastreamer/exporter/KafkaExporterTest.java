@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
@@ -35,9 +36,11 @@ class KafkaExporterTest {
         Logger logger = mock(Logger.class);
         Context context = mock(Context.class, RETURNS_DEEP_STUBS);
         when(context.getLogger()).thenReturn(logger);
-        when(context.getConfiguration().instantiate(KafkaExporterConfiguration.class)).thenReturn(new KafkaExporterConfiguration());
+        KafkaExporterConfiguration configuration = new KafkaExporterConfiguration();
+        configuration.kafkaUrl = "kafka:9092";
+        when(context.getConfiguration().instantiate(KafkaExporterConfiguration.class)).thenReturn(configuration);
         exporter.configure(context);
-        exporter.open(controller, new KafkaExporterClient(producer, logger));
+        exporter.open(controller, new KafkaExporterClient(new KafkaExporterConfiguration(), producer, logger));
     }
 
     @Test
@@ -69,6 +72,17 @@ class KafkaExporterTest {
 
         scheduledFlush().run();
         verify(controller).updateLastExportedRecordPosition(3L);
+    }
+
+    @Test
+    void closeConfirmsPendingRecordsAndClosesTheProducer() {
+        exporter.export(positioned(1));
+        exporter.export(positioned(2));
+
+        exporter.close();
+
+        verify(controller).updateLastExportedRecordPosition(2L);
+        assertTrue(producer.closed());
     }
 
     private Runnable scheduledFlush() {
