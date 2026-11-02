@@ -12,13 +12,17 @@ import java.time.Duration;
  * Bad configuration or an unreachable Kafka must not stop payments: Zeebe stops a broker whose
  * exporter throws from configure() and steps a partition down when open() throws. Instead the
  * exporter degrades: export() throws, so Zeebe keeps processing, holds the exported position and
- * retries the record, while {@link #DEGRADED_EVENT} is logged for alerting.
+ * retries the record, while {@link #DEGRADED_EVENT} is logged for alerting. A Kafka outage is
+ * reported the same way, with {@link #RECOVERED_EVENT} once Kafka accepts records again.
  */
 public class KafkaExporter implements Exporter {
     // Alert on this. Format: event=kafka_exporter_degraded reason=<reason> partition=<id|-> detail="<text>"
     static final String DEGRADED_EVENT = "event=kafka_exporter_degraded reason={} partition={} detail=\"{}\"";
     static final String REASON_INVALID_CONFIG = "invalid_config";
     static final String REASON_PRODUCER_UNAVAILABLE = "producer_unavailable";
+    static final String REASON_KAFKA_UNAVAILABLE = "kafka_unavailable";
+    // Logged once Kafka accepts records again, so an alert can resolve itself.
+    static final String RECOVERED_EVENT = "event=kafka_exporter_recovered partition={}";
     private static final long DEGRADED_LOG_INTERVAL_MS = Duration.ofMinutes(1).toMillis();
 
     private Logger logger;
@@ -27,6 +31,8 @@ public class KafkaExporter implements Exporter {
     private KafkaExporterClient client;
     private String configurationProblem;
     private long lastDegradedLogMs;
+    private boolean unavailable;
+    private String partition = "-";
 
     private long lastPosition = -1;
 
@@ -48,7 +54,7 @@ public class KafkaExporter implements Exporter {
         logger.info("DPC Kafka exporter opening");
         this.controller = controller;
         if (configurationProblem == null) {
-            connect("-");
+            connect();
             scheduleDelayedFlush();
         }
         logger.info("DPC Kafka exporter opened");
@@ -85,12 +91,12 @@ public class KafkaExporter implements Exporter {
     @Override
     public void export(Record<?> record) {
         logger.trace("Exporting record " + record);
-        String partition = String.valueOf(record.getPartitionId());
+        partition = String.valueOf(record.getPartitionId());
         if (configurationProblem != null) {
             logDegradedEveryInterval(REASON_INVALID_CONFIG, partition, configurationProblem);
             throw new IllegalStateException("Kafka exporter is degraded, invalid configuration: " + configurationProblem);
         }
-        if (client == null && !connect(partition)) {
+        if (client == null && !connect()) {
             throw new IllegalStateException("Kafka exporter is degraded, Kafka producer could not be created");
         }
         // Zeebe retries a record whose export throws, so this holds new records back until Kafka catches up.
@@ -103,13 +109,23 @@ public class KafkaExporter implements Exporter {
     }
 
     // A producer can fail to start (for example an unresolvable host before Kafka's DNS exists), so export retries it.
-    private boolean connect(String partition) {
+    private boolean connect() {
         try {
             client = new KafkaExporterClient(configuration, logger);
+            markRecovered();
             return true;
         } catch (Exception e) {
+            unavailable = true;
             logDegradedEveryInterval(REASON_PRODUCER_UNAVAILABLE, partition, rootMessage(e), e);
             return false;
+        }
+    }
+
+    private void markRecovered() {
+        if (unavailable) {
+            unavailable = false;
+            lastDegradedLogMs = 0;
+            logger.info(RECOVERED_EVENT, partition);
         }
     }
 
@@ -172,8 +188,11 @@ public class KafkaExporter implements Exporter {
     private boolean flush() {
         if (client.flush()) {
             controller.updateLastExportedRecordPosition(lastPosition);
+            markRecovered();
             return true;
         }
+        unavailable = true;
+        logDegradedEveryInterval(REASON_KAFKA_UNAVAILABLE, partition, client.lastFailure());
         logger.warn("Failed to flush bulk completely, keeping the last exported position");
         return false;
     }
